@@ -18,12 +18,16 @@ export dqgmres
 DQGMRES algorithm is based on the incomplete Arnoldi orthogonalization process
 and computes a sequence of approximate solutions with the quasi-minimal residual property.
 
-This implementation allows a right preconditioner M.
+This implementation allows a left preconditioner M and a right preconditioner N.
+- Left  preconditioning : M⁻¹Ax = M⁻¹b
+- Right preconditioning : AN⁻¹u = b with x = N⁻¹u
+- Split preconditioning : M⁻¹AN⁻¹u = M⁻¹b with x = N⁻¹u
 """
 function dqgmres(A :: AbstractLinearOperator, b :: AbstractVector{T};
-                 M :: AbstractLinearOperator=opEye(), atol :: Float64=1.0e-8,
-                 rtol :: Float64=1.0e-6, itmax :: Int=0, memory :: Int=20,
-                 verbose :: Bool=false) where T <: Number
+                 M :: AbstractLinearOperator=opEye(),
+                 N :: AbstractLinearOperator=opEye(),
+                 atol :: T=√eps(T), rtol :: T=√eps(T), itmax :: Int=0,
+                 memory :: Int=20, verbose :: Bool=false) where T <: AbstractFloat
 
   m, n = size(A)
   m == n || error("System must be square")
@@ -31,10 +35,11 @@ function dqgmres(A :: AbstractLinearOperator, b :: AbstractVector{T};
   verbose && @printf("DQGMRES: system of size %d\n", n)
 
   # Initial solution x₀ and residual r₀.
-  x = zeros(T, n)
-  # Compute β.
-  rNorm = @knrm2(n, b) # rNorm = ‖r₀‖₂
-  rNorm == 0.0 && return x, SimpleStats(true, false, [rNorm], T[], "x = 0 is a zero-residual solution")
+  x = zeros(T, n) # x₀
+  r₀ = M * b      # M⁻¹(b - Ax₀)
+  # Compute β
+  rNorm = @knrm2(n, r₀) # β = ‖r₀‖₂
+  rNorm == 0 && return x, SimpleStats(true, false, [rNorm], T[], "x = 0 is a zero-residual solution")
 
   iter = 0
   itmax == 0 && (itmax = 2*n)
@@ -45,18 +50,18 @@ function dqgmres(A :: AbstractLinearOperator, b :: AbstractVector{T};
 
   # Set up workspace.
   mem = min(memory, itmax) # Memory.
-  V = [zeros(n) for i = 1 : mem] # Preconditioned Krylov vectors, orthogonal basis for {r₀, AM⁻¹r₀, (AM⁻¹)²r₀, ..., (AM⁻¹)ᵐ⁻¹r₀}.
-  P = [zeros(n) for i = 1 : mem] # Directions for x : Pₘ = Vₘ(Rₘ)⁻¹.
-  s = zeros(mem)    # Last mem Givens sines used for the factorization QₘRₘ = Hₘ.
-  c = zeros(mem)    # Last mem Givens cosines used for the factorization QₘRₘ = Hₘ.
-  H = zeros(mem+2)  # Last column of the band hessenberg matrix Hₘ.
+  V = [zeros(T, n) for i = 1 : mem] # Preconditioned Krylov vectors, orthogonal basis for {b, M⁻¹AN⁻¹b, (M⁻¹AN⁻¹)²b, ..., (M⁻¹AN⁻¹)ᵐ⁻¹b}.
+  P = [zeros(T, n) for i = 1 : mem] # Directions for x : Pₘ = Vₘ(Rₘ)⁻¹.
+  s = zeros(T, mem)                 # Last mem Givens sines used for the factorization QₘRₘ = Hₘ.
+  c = zeros(T, mem)                 # Last mem Givens cosines used for the factorization QₘRₘ = Hₘ.
+  H = zeros(T, mem+2)               # Last column of the band hessenberg matrix Hₘ.
   # Each column has at most mem + 1 nonzero elements. hᵢ.ₘ is stored as H[m-i+2].
   # m-i+2 represents the indice of the diagonal where hᵢ.ₘ is located.
   # In addition of that, the last column of Rₘ is also stored in H.
 
   # Initial γ₁ and V₁.
   γₘ = rNorm # γₘ and γₘ₊₁ are the last components of gₘ, right-hand of the least squares problem min ‖ Hₘyₘ - gₘ ‖₂.
-  @. V[1] = b / rNorm
+  @. V[1] = r₀ / rNorm
 
   # The following stopping criterion compensates for the lag in the
   # residual, but usually increases the number of iterations.
@@ -75,22 +80,23 @@ function dqgmres(A :: AbstractLinearOperator, b :: AbstractVector{T};
     next_pos = mod(iter, mem) + 1 # Position corresponding to vₘ₊₁ in the circular stack V.
 
     # Incomplete Arnoldi procedure.
-    z = M * V[pos] # Forms pₘ
-    w = A * z # Forms vₘ₊₁
+    z = N * V[pos] # N⁻¹vₘ, forms pₘ
+    t = A * z      # AN⁻¹vₘ
+    w = M * t      # M⁻¹AN⁻¹vₘ, forms vₘ₊₁
     for i = max(1, iter-mem+1) : iter
       ipos = mod(i-1, mem) + 1 # Position corresponding to vᵢ in the circular stack V.
       diag = iter - i + 2
-      H[diag] = @kdot(n, w, V[ipos]) # hᵢ.ₘ = < A * M⁻¹vₘ , vᵢ >
+      H[diag] = @kdot(n, w, V[ipos]) # hᵢ.ₘ = < M⁻¹AN⁻¹vₘ , vᵢ >
       @kaxpy!(n, -H[diag], V[ipos], w) # w ← w - hᵢ.ₘ * vᵢ
     end
     # Compute hₘ₊₁.ₘ and vₘ₊₁.
     H[1] = @knrm2(n, w) # hₘ₊₁.ₘ = ‖vₘ₊₁‖₂
-    if H[1] ≠ 0.0 # hₘ₊₁.ₘ = 0 ⇒ "lucky breakdown"
+    if H[1] ≠ 0 # hₘ₊₁.ₘ = 0 ⇒ "lucky breakdown"
       @. V[next_pos] = w / H[1] # vₘ₊₁ = w / hₘ₊₁.ₘ
     end
     # rₘ₋ₘₑₘ.ₘ ≠ 0 when m ≥ mem + 1
     if iter ≥ mem + 2
-      H[mem+2] = 0.0 # hₘ₋ₘₑₘ.ₘ = 0
+      H[mem+2] = zero(T) # hₘ₋ₘₑₘ.ₘ = 0
     end
 
     # Update the QR factorization of H.
@@ -123,8 +129,8 @@ function dqgmres(A :: AbstractLinearOperator, b :: AbstractVector{T};
         @kaxpy!(n, -H[diag], P[ipos], P[pos])
       end
     end
-    # pₐᵤₓ ← pₐᵤₓ + M⁻¹vₘ
-    @kaxpy!(n, 1.0, z, P[pos])
+    # pₐᵤₓ ← pₐᵤₓ + N⁻¹vₘ
+    @kaxpy!(n, one(T), z, P[pos])
     # pₘ = pₐᵤₓ / hₘ.ₘ
     @. P[pos] = P[pos] / H[2]
 
@@ -133,7 +139,7 @@ function dqgmres(A :: AbstractLinearOperator, b :: AbstractVector{T};
     @kaxpy!(n, γₘ, P[pos], x)
 
     # Update residual norm estimate.
-    # ‖ Axₘ - b ‖₂ ≈ |γₘ₊₁|
+    # ‖ M⁻¹(b - Axₘ) ‖₂ ≈ |γₘ₊₁|
     rNorm = abs(γₘ₊₁)
     push!(rNorms, rNorm)
 

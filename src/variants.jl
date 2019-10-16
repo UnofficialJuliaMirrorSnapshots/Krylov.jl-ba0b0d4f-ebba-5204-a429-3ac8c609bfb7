@@ -10,10 +10,18 @@ function preallocated_LinearOperator(A)
 end
 
 # Variants where A is a matrix without specific properties
-for fn in (:cgls, :cgne, :craig, :craigmr, :crls, :crmr, :lslq, :lsmr, :lsqr, :dqgmres, :diom, :cgs)
+for fn in (:cgls, :cgne, :craig, :craigmr, :crls, :crmr, :lslq, :lsmr, :lsqr, :dqgmres, :diom, :cgs, :bilq)
   @eval begin
     $fn(A :: AbstractMatrix{TA}, b :: AbstractVector{Tb}, args...; kwargs...) where {TA, Tb <: Number} =
       $fn(preallocated_LinearOperator(A), convert(Vector{Float64}, b), args...; kwargs...)
+  end
+end
+
+# Variants for USYMQR
+for fn in (:usymqr,)
+  @eval begin
+    $fn(A :: AbstractMatrix{TA}, b :: AbstractVector{Tb}, c :: AbstractVector{Tc}, args...; kwargs...) where {TA, Tb, Tc <: Number} =
+      $fn(preallocated_LinearOperator(A), convert(Vector{Float64}, b), convert(Vector{Float64}, c), args...; kwargs...)
   end
 end
 
@@ -25,7 +33,7 @@ function preallocated_symmetric_LinearOperator(A)
 end
 
 # Variants where A must be symmetric
-for fn in (:cg_lanczos, :cg_lanczos_shift_seq, :cg, :cr, :minres, :symmlq)
+for fn in (:cg_lanczos, :cg_lanczos_shift_seq, :cg, :cr, :minres, :minres_qlp, :symmlq)
   @eval begin
     $fn(A :: AbstractMatrix{TA}, b :: AbstractVector{Tb}, args...; kwargs...) where {TA, Tb <: Number} =
       $fn(preallocated_symmetric_LinearOperator(A), convert(Vector{Float64}, b), args...; kwargs...)

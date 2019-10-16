@@ -54,9 +54,9 @@ but simpler to implement. Only the x-part of the solution is returned.
 A preconditioner M may be provided in the form of a linear operator.
 """
 function cgne(A :: AbstractLinearOperator, b :: AbstractVector{T};
-              M :: AbstractLinearOperator=opEye(), λ :: Float64=0.0,
-              atol :: Float64=1.0e-8, rtol :: Float64=1.0e-6, itmax :: Int=0,
-              verbose :: Bool=false) where T <: Number
+              M :: AbstractLinearOperator=opEye(), λ :: T=zero(T),
+              atol :: T=√eps(T), rtol :: T=√eps(T), itmax :: Int=0,
+              verbose :: Bool=false) where T <: AbstractFloat
 
   m, n = size(A);
   size(b, 1) == m || error("Inconsistent problem size");
@@ -93,7 +93,7 @@ function cgne(A :: AbstractLinearOperator, b :: AbstractVector{T};
 
   status = "unknown";
   solved = rNorm <= ɛ_c;
-  inconsistent = (rNorm > 1.0e+2 * ɛ_c) && (pNorm <= ɛ_i);
+  inconsistent = (rNorm > 100 * ɛ_c) && (pNorm ≤ ɛ_i);
   tired = iter >= itmax;
 
   while ! (solved || inconsistent || tired)
@@ -108,10 +108,10 @@ function cgne(A :: AbstractLinearOperator, b :: AbstractVector{T};
     γ_next = @kdot(m, r, z)  # Faster than γ_next = dot(r, z);
     β = γ_next / γ;
     Aᵀz = A.tprod(z)
-    @kaxpby!(n, 1.0, Aᵀz, β, p)  # Faster than p = Aᵀz + β * p;
+    @kaxpby!(n, one(T), Aᵀz, β, p)  # Faster than p = Aᵀz + β * p;
     pNorm = @knrm2(n, p)
     if λ > 0
-      @kaxpby!(m, 1.0, r, β, s)  # s = r + β * s;
+      @kaxpby!(m, one(T), r, β, s)  # s = r + β * s;
     end
     γ = γ_next;
     rNorm = sqrt(γ_next);
@@ -119,7 +119,7 @@ function cgne(A :: AbstractLinearOperator, b :: AbstractVector{T};
     iter = iter + 1;
     verbose && @printf("%5d  %8.2e\n", 1 + 2 * iter, rNorm);
     solved = rNorm <= ɛ_c;
-    inconsistent = (rNorm > 1.0e+2 * ɛ_c) && (pNorm <= ɛ_i);
+    inconsistent = (rNorm > 100 * ɛ_c) && (pNorm ≤ ɛ_i);
     tired = iter >= itmax;
   end
 

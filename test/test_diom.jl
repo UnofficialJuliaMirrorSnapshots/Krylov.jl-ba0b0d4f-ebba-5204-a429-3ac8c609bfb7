@@ -79,6 +79,26 @@ function test_diom()
   @printf("DIOM: Relative residual: %8.1e\n", resid)
   @test(resid ≤ diom_tol)
   @test(stats.solved)
+
+  # Right preconditioning
+  A, b, N = square_preconditioned()
+  (x, stats) = diom(A, b, N=N)
+  show(stats)
+  r = b - A * x
+  resid = norm(r) / norm(b)
+  @printf("DIOM: Relative residual: %8.1e\n", resid)
+  @test(resid ≤ diom_tol)
+  @test(stats.solved)
+
+  # Split preconditioning
+  A, b, M, N = two_preconditioners()
+  (x, stats) = diom(A, b, M=M, N=N)
+  show(stats)
+  r = b - A * x
+  resid = norm(r) / norm(b)
+  @printf("DIOM: Relative residual: %8.1e\n", resid)
+  @test(resid ≤ diom_tol)
+  @test(stats.solved)
 end
 
 test_diom()
