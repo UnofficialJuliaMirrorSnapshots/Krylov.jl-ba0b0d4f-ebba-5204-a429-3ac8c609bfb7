@@ -10,7 +10,7 @@ function preallocated_LinearOperator(A :: AbstractMatrix, T)
 end
 
 # Variants where A is a matrix without specific properties
-for fn in (:cgls, :cgne, :craig, :craigmr, :crls, :crmr, :lslq, :lsmr, :lsqr, :dqgmres, :diom, :cgs, :bilq)
+for fn in (:cgls, :cgne, :craig, :craigmr, :crls, :crmr, :lslq, :lsmr, :lsqr, :dqgmres, :diom, :cgs, :bilq, :qmr)
   @eval begin
     function $fn(A :: AbstractMatrix{TA}, b :: AbstractVector{Tb}, args...; kwargs...) where {TA, Tb <: Number}
       S = promote_type(TA, Tb)
@@ -28,8 +28,8 @@ for fn in (:cgls, :cgne, :craig, :craigmr, :crls, :crmr, :lslq, :lsmr, :lsqr, :d
   end
 end
 
-# Variants for USYMQR
-for fn in (:usymqr,)
+# Variants for USYMLQ and USYMQR
+for fn in (:usymlq, :usymqr)
   @eval begin
     function $fn(A :: AbstractMatrix{TA}, b :: AbstractVector{Tb}, c :: AbstractVector{Tc}, args...; kwargs...) where {TA, Tb, Tc <: Number}
       S = promote_type(TA, Tb, Tc)

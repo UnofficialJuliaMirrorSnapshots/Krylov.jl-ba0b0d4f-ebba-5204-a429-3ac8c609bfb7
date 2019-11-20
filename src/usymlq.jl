@@ -1,39 +1,50 @@
-# An implementation of BiLQ for the solution of unsymmetric
-# and square consistent linear system Ax = b.
+# An implementation of USYMLQ for the solution of linear system Ax = b.
 #
 # This method is described in
+#
+# M. A. Saunders, H. D. Simon, and E. L. Yip
+# Two Conjugate-Gradient-Type Methods for Unsymmetric Linear Equations.
+# SIAM Journal on Numerical Analysis, 25(4), pp. 927--940, 1988.
+#
+# A. Buttari, D. Orban, D. Ruiz and D. Titley-Peloquin
+# A tridiagonalization method for symmetric saddle-point and quasi-definite systems.
+# Cahier du GERAD G-2018-42, GERAD, Montreal, 2018. doi:10.13140/RG.2.2.26337.20328
 #
 # A. Montoison and D. Orban
 # BiLQ: An Iterative Method for Nonsymmetric Linear Systems with a Quasi-Minimum Error Property.
 # Cahier du GERAD G-2019-71, GERAD, Montreal, 2019. doi:10.13140/RG.2.2.18287.59042
 #
 # Alexis Montoison, <alexis.montoison@polymtl.ca>
-# Montreal, February 2019.
+# Montreal, November 2018.
 
-export bilq
+export usymlq
 
-"""Solve the square linear system Ax = b using the BiLQ method.
+"""Solve the linear system Ax = b using the USYMLQ method.
 
-BiLQ is based on the Lanczos biorthogonalization process.
-When A is symmetric and b = c, BiLQ is equivalent to SYMMLQ.
+USYMLQ is based on a tridiagonalization process for unsymmetric matrices.
+The error norm ‖x - x*‖ monotonously decreases in USYMLQ.
+It's considered as a generalization of SYMMLQ.
 
-An option gives the possibility of transferring to the BiCG point,
+It can also be applied to under-determined and over-determined problems.
+In all cases, problems must be consistent.
+
+An option gives the possibility of transferring to the USYMCG point,
 when it exists. The transfer is based on the residual norm.
 
-This version of BiLQ works in any floating-point data type.
+This version of USYMLQ works in any floating-point data type.
 """
-function bilq(A :: AbstractLinearOperator, b :: AbstractVector{T}; c :: AbstractVector{T}=b,
-              atol :: T=√eps(T), rtol :: T=√eps(T), transfer_to_bicg :: Bool=true,
-              itmax :: Int=0, verbose :: Bool=false) where T <: AbstractFloat
+function usymlq(A :: AbstractLinearOperator, b :: AbstractVector{T}, c :: AbstractVector{T};
+                atol :: T=√eps(T), rtol :: T=√eps(T), transfer_to_usymcg :: Bool=true,
+                itmax :: Int=0, verbose :: Bool=false) where T <: AbstractFloat
 
-  n, m = size(A)
-  m == n || error("System must be square")
+  m, n = size(A)
   length(b) == m || error("Inconsistent problem size")
-  verbose && @printf("BILQ: system of size %d\n", n)
+  length(c) == n || error("Inconsistent problem size")
+  verbose && @printf("USYMLQ: system of %d equations in %d variables\n", m, n)
 
   # Initial solution x₀ and residual norm ‖r₀‖.
   x = zeros(T, n)
-  bNorm = @knrm2(n, b)  # ‖r₀‖
+  bNorm = @knrm2(m, b)  # ‖r₀‖
   bNorm == 0 && return (x, SimpleStats(true, false, [bNorm], T[], "x = 0 is a zero-residual solution"))
 
   iter = 0
@@ -44,54 +55,47 @@ function bilq(A :: AbstractLinearOperator, b :: AbstractVector{T}; c :: Abstract
   verbose && @printf("%5s  %7s\n", "k", "‖rₖ‖")
   verbose && @printf("%5d  %7.1e\n", iter, bNorm)
 
-  # Initialize the Lanczos biorthogonalization process.
-  bᵗc = @kdot(n, b, c)  # ⟨b,c⟩
-  bᵗc == 0 && return (x, SimpleStats(false, false, [bNorm], T[], "Breakdown bᵀc = 0"))
-
   # Set up workspace.
-  βₖ = √(abs(bᵗc))           # β₁γ₁ = bᵀc
-  γₖ = bᵗc / βₖ              # β₁γ₁ = bᵀc
-  vₖ₋₁ = zeros(T, n)         # v₀ = 0
+  βₖ = @knrm2(m, b)          # β₁ = ‖v₁‖
+  γₖ = @knrm2(n, c)          # γ₁ = ‖u₁‖
+  vₖ₋₁ = zeros(T, m)         # v₀ = 0
   uₖ₋₁ = zeros(T, n)         # u₀ = 0
   vₖ = b / βₖ                # v₁ = b / β₁
   uₖ = c / γₖ                # u₁ = c / γ₁
-  cₖ₋₁ = cₖ = -one(T)        # Givens cosines used for the LQ factorization of Tₖ
+  cₖ₋₁ = cₖ = - one(T)       # Givens cosines used for the LQ factorization of Tₖ
   sₖ₋₁ = sₖ = zero(T)        # Givens sines used for the LQ factorization of Tₖ
-  d̅ = zeros(T, n)            # Last column of D̅ₖ = Vₖ(Qₖ)ᵀ
+  d̅ = zeros(T, n)            # Last column of D̅ₖ = Uₖ(Qₖ)ᵀ
   ζₖ₋₁ = ζbarₖ = zero(T)     # ζₖ₋₁ and ζbarₖ are the last components of z̅ₖ = (L̅ₖ)⁻¹β₁e₁
   ζₖ₋₂ = ηₖ = zero(T)        # ζₖ₋₂ and ηₖ are used to update ζₖ₋₁ and ζbarₖ
-  δbarₖ₋₁ = δbarₖ = zero(T)  # Coefficients of Lₖ₋₁ and L̅ₖ modified during two iterations
-  norm_vₖ = bNorm / βₖ       # ‖vₖ‖ is used for residual norm estimates
+  δbarₖ₋₁ = δbarₖ = zero(T)  # Coefficients of Lₖ₋₁ and Lₖ modified during two iterations
 
   # Stopping criterion.
   solved_lq = bNorm ≤ ε
   solved_cg = false
-  breakdown = false
   tired     = iter ≥ itmax
   status    = "unknown"
 
-  while !(solved_lq || solved_cg || tired || breakdown)
+  while !(solved_lq || solved_cg || tired)
     # Update iteration index.
     iter = iter + 1
 
-    # Continue the Lanczos biorthogonalization process.
-    # AVₖ  = VₖTₖ    + βₖ₊₁vₖ₊₁(eₖ)ᵀ = Vₖ₊₁Tₖ₊₁.ₖ
-    # AᵀUₖ = Uₖ(Tₖ)ᵀ + γₖ₊₁uₖ₊₁(eₖ)ᵀ = Uₖ₊₁(Tₖ.ₖ₊₁)ᵀ
+    # Continue the SSY tridiagonalization process.
+    # AUₖ  = VₖTₖ    + βₖ₊₁vₖ₊₁(eₖ)ᵀ = Vₖ₊₁Tₖ₊₁.ₖ
+    # AᵀVₖ = Uₖ(Tₖ)ᵀ + γₖ₊₁uₖ₊₁(eₖ)ᵀ = Uₖ₊₁(Tₖ.ₖ₊₁)ᵀ
 
-    q = A * vₖ       # Forms vₖ₊₁ : q ← Avₖ
-    p = A.tprod(uₖ)  # Forms uₖ₊₁ : p ← Aᵀuₖ
+    q = A * uₖ       # Forms vₖ₊₁ : q ← Auₖ
+    p = A.tprod(vₖ)  # Forms uₖ₊₁ : p ← Aᵀvₖ
 
-    @kaxpy!(n, -γₖ, vₖ₋₁, q)  # q ← q - γₖ * vₖ₋₁
+    @kaxpy!(m, -γₖ, vₖ₋₁, q)  # q ← q - γₖ * vₖ₋₁
     @kaxpy!(n, -βₖ, uₖ₋₁, p)  # p ← p - βₖ * uₖ₋₁
 
-    αₖ = @kdot(n, q, uₖ)      # αₖ = qᵀuₖ
+    αₖ = @kdot(m, q, vₖ)      # αₖ = qᵀvₖ
 
-    @kaxpy!(n, -αₖ, vₖ, q)    # q ← q - αₖ * vₖ
+    @kaxpy!(m, -αₖ, vₖ, q)    # q ← q - αₖ * vₖ
     @kaxpy!(n, -αₖ, uₖ, p)    # p ← p - αₖ * uₖ
 
-    qᵗp = @kdot(n, p, q)      # qᵗp  = ⟨q,p⟩
-    βₖ₊₁ = √(abs(qᵗp))        # βₖ₊₁ = √(|qᵗp|)
-    γₖ₊₁ = qᵗp / βₖ₊₁         # γₖ₊₁ = qᵗp / βₖ₊₁
+    βₖ₊₁ = @knrm2(m, q)       # βₖ₊₁ = ‖q‖
+    γₖ₊₁ = @knrm2(n, p)       # γₖ₊₁ = ‖p‖
 
     # Update the LQ factorization of Tₖ = L̅ₖQₖ.
     # [ α₁ γ₂ 0  •  •  •  0 ]   [ δ₁   0    •   •   •    •    0   ]
@@ -146,82 +150,77 @@ function bilq(A :: AbstractLinearOperator, b :: AbstractVector{T}; c :: Abstract
       ηₖ   = -ϵₖ₋₂ * ζₖ₋₂ - λₖ₋₁ * ζₖ₋₁
     end
 
-    # Relations for the directions dₖ₋₁ and d̅ₖ, the last two columns of D̅ₖ = Vₖ(Qₖ)ᵀ.
-    # [d̅ₖ₋₁ vₖ] [cₖ  sₖ] = [dₖ₋₁ d̅ₖ] ⟷ dₖ₋₁ = cₖ * d̅ₖ₋₁ + sₖ * vₖ
-    #           [sₖ -cₖ]             ⟷ d̅ₖ   = sₖ * d̅ₖ₋₁ - cₖ * vₖ
+    # Relations for the directions dₖ₋₁ and d̅ₖ, the last two columns of D̅ₖ = Uₖ(Qₖ)ᵀ.
+    # [d̅ₖ₋₁ uₖ] [cₖ  sₖ] = [dₖ₋₁ d̅ₖ] ⟷ dₖ₋₁ = cₖ * d̅ₖ₋₁ + sₖ * uₖ
+    #           [sₖ -cₖ]             ⟷ d̅ₖ   = sₖ * d̅ₖ₋₁ - cₖ * uₖ
     if iter ≥ 2
       # Compute solution xₖ.
       # (xᴸ)ₖ₋₁ ← (xᴸ)ₖ₋₂ + ζₖ₋₁ * dₖ₋₁
       @kaxpy!(n, ζₖ₋₁ * cₖ,  d̅, x)
-      @kaxpy!(n, ζₖ₋₁ * sₖ, vₖ, x)
+      @kaxpy!(n, ζₖ₋₁ * sₖ, uₖ, x)
     end
 
     # Compute d̅ₖ.
     if iter == 1
-      # d̅₁ = v₁
-      @. d̅ = vₖ
+      # d̅₁ = u₁
+      @. d̅ = uₖ
     else
-      # d̅ₖ = sₖ * d̅ₖ₋₁ - cₖ * vₖ
-      @kaxpby!(n, -cₖ, vₖ, sₖ, d̅)
+      # d̅ₖ = sₖ * d̅ₖ₋₁ - cₖ * uₖ
+      @kaxpby!(n, -cₖ, uₖ, sₖ, d̅)
     end
 
-    # Compute vₖ₊₁ and uₖ₊₁.
-    @. vₖ₋₁ = vₖ # vₖ₋₁ ← vₖ
-    @. uₖ₋₁ = uₖ # uₖ₋₁ ← uₖ
+    # Compute uₖ₊₁ and uₖ₊₁.
+    @. vₖ₋₁ = vₖ  # vₖ₋₁ ← vₖ
+    @. uₖ₋₁ = uₖ  # uₖ₋₁ ← uₖ
 
-    if qᵗp ≠ 0
-      @. vₖ = q / βₖ₊₁ # βₖ₊₁vₖ₊₁ = q
-      @. uₖ = p / γₖ₊₁ # γₖ₊₁uₖ₊₁ = p
+    if βₖ₊₁ ≠ zero(T)
+      @. vₖ = q / βₖ₊₁  # βₖ₊₁vₖ₊₁ = q
+    end
+    if γₖ₊₁ ≠ zero(T)
+      @. uₖ = p / γₖ₊₁  # γₖ₊₁uₖ₊₁ = p
     end
 
-    # Compute ⟨vₖ,vₖ₊₁⟩ and ‖vₖ₊₁‖
-    dot_vₖ_vₖ₊₁ = @kdot(n, vₖ₋₁, vₖ)
-    norm_vₖ₊₁ = @knrm2(n, vₖ)
-
-    # Compute BiLQ residual norm
-    # ‖rₖ‖ = √((μₖ)²‖vₖ‖² + (ωₖ)²‖vₖ₊₁‖² + 2μₖωₖ⟨vₖ,vₖ₊₁⟩)
+    # Compute USYMLQ residual norm
+    # ‖rₖ‖ = √((μₖ)² + (ωₖ)²)
     if iter == 1
       rNorm_lq = bNorm
     else
       μₖ = βₖ * (sₖ₋₁ * ζₖ₋₂ - cₖ₋₁ * cₖ * ζₖ₋₁) + αₖ * sₖ * ζₖ₋₁
       ωₖ = βₖ₊₁ * sₖ * ζₖ₋₁
-      rNorm_lq = sqrt(μₖ^2 * norm_vₖ^2 + ωₖ^2 * norm_vₖ₊₁^2 + 2 * μₖ * ωₖ * dot_vₖ_vₖ₊₁)
+      rNorm_lq = sqrt(μₖ^2 + ωₖ^2)
     end
     push!(rNorms, rNorm_lq)
 
-    # Compute BiCG residual norm
-    # ‖rₖ‖ = |ρₖ| * ‖vₖ₊₁‖
-    if transfer_to_bicg && (δbarₖ ≠ 0)
+    # Compute USYMCG residual norm
+    # ‖rₖ‖ = |ρₖ|
+    if transfer_to_usymcg && (δbarₖ ≠ 0)
       ζbarₖ = ηₖ / δbarₖ
       ρₖ = βₖ₊₁ * (sₖ * ζₖ₋₁ - cₖ * ζbarₖ)
-      rNorm_cg = abs(ρₖ) * norm_vₖ₊₁
+      rNorm_cg = abs(ρₖ)
     end
 
-    # Update sₖ₋₁, cₖ₋₁, γₖ, βₖ, δbarₖ₋₁ and norm_vₖ.
+    # Update sₖ₋₁, cₖ₋₁, γₖ, βₖ and δbarₖ₋₁.
     sₖ₋₁    = sₖ
     cₖ₋₁    = cₖ
     γₖ      = γₖ₊₁
     βₖ      = βₖ₊₁
     δbarₖ₋₁ = δbarₖ
-    norm_vₖ = norm_vₖ₊₁
 
     # Update stopping criterion.
     solved_lq = rNorm_lq ≤ ε
-    solved_cg = transfer_to_bicg && (δbarₖ ≠ 0) && (rNorm_cg ≤ ε)
+    solved_cg = transfer_to_usymcg && (δbarₖ ≠ 0) && (rNorm_cg ≤ ε)
     tired = iter ≥ itmax
-    breakdown = !solved_lq && !solved_cg && (qᵗp == 0)
     verbose && @printf("%5d  %7.1e\n", iter, rNorm_lq)
   end
   verbose && @printf("\n")
 
-  # Compute BICG point
+  # Compute USYMCG point
   # (xᶜ)ₖ ← (xᴸ)ₖ₋₁ + ζbarₖ * d̅ₖ
   if solved_cg
     @kaxpy!(n, ζbarₖ, d̅, x)
   end
 
   tired     && (status = "maximum number of iterations exceeded")
-  breakdown && (status = "Breakdown ⟨uₖ₊₁,vₖ₊₁⟩ = 0")
   solved_lq && (status = "solution xᴸ good enough given atol and rtol")
   solved_cg && (status = "solution xᶜ good enough given atol and rtol")
   stats = SimpleStats(solved_lq || solved_cg, false, rNorms, T[], status)

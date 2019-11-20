@@ -223,3 +223,22 @@ expected_minres_qlp_bytes = storage_minres_qlp_bytes(n)
 minres_qlp(A, b)  # warmup
 actual_minres_qlp_bytes = @allocated minres_qlp(A, b)
 @test actual_minres_qlp_bytes ≤ 1.1 * expected_minres_qlp_bytes
+
+# with (Ap, Aᵗp) preallocated, QMR needs:
+# - 7 n-vectors: uₖ₋₁, uₖ, vₖ₋₁, vₖ, x, wₖ₋₁, wₖ
+storage_qmr(n) = 7 * n
+storage_qmr_bytes(n) = 8 * storage_qmr(n)
+expected_qmr_bytes = storage_qmr_bytes(n)
+qmr(A, b)  # warmup
+actual_qmr_bytes = @allocated qmr(A, b)
+@test actual_qmr_bytes ≤ 1.1 * expected_qmr_bytes
+
+# with (Ap, Aᵀp) preallocated, USYMLQ needs:
+# - 4 n-vectors: vₖ₋₁, vₖ, x, d̅
+# - 2 m-vectors: uₖ₋₁, uₖ
+storage_usymlq(n, m) = 4 * n + 2 * m
+storage_usymlq_bytes(n, m) = 8 * storage_usymlq(n, m)
+expected_usymlq_bytes = storage_usymlq_bytes(n, m)
+usymlq(Au, c, b)  # warmup
+actual_usymlq_bytes = @allocated usymlq(Au, c, b)
+@test actual_usymlq_bytes ≤ 1.1 * expected_usymlq_bytes
